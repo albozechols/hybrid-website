@@ -67,7 +67,7 @@ D.seasons.forEach(z=>{if(!(z.rounds&&z.rounds.length&&typeof z.rounds[0]==="obje
 return D}
 const FILE=norm(JSON.parse(JSON.stringify(window.STANDINGS||{liga:"",kelas:"LMGT3"}))),ORIG=JSON.stringify(FILE);
 let draft=null;try{draft=JSON.parse(localStorage.getItem(DK))}catch(e){}
-let D=norm(draft&&draft.seasons?draft:JSON.parse(ORIG));
+let D=norm(draft&&draft.seasons&&location.hash==="#admin"?draft:JSON.parse(ORIG));
 // Isi konfigurasi Firebase setelah membuat project Firebase. Data dibaca publik, tetapi penulisan wajib login admin.
 const FIREBASE_CONFIG={
  apiKey:"AIzaSyA3F70jJL5gjOP2jiASeqWHAlBBt1VA6Vo",
@@ -83,13 +83,14 @@ const ADMIN_UID="Iq7EOcJlNmdjnPCoidep70PZW7J3";
 let fbReady=false,remoteReady=false,isAdmin=false,saveTimer=null,remoteRef=null,auth=null,currentFirebaseUser=null,dbReadError="";
 const firebaseConfigured=()=>FIREBASE_CONFIG.apiKey&&FIREBASE_CONFIG.projectId==="hybrid-website";
 function signInGoogle(){if(!auth){alert("Firebase belum siap. Periksa konfigurasi Firebase.");return}const provider=new firebase.auth.GoogleAuthProvider();auth.signInWithPopup(provider).catch(e=>alert("Login Google gagal: "+e.message))}
-function sd(){if(location.hash!=="#admin"||!isAdmin)return;try{localStorage.setItem(DK,JSON.stringify(D))}catch(e){};if(!fbReady||!remoteReady)return;clearTimeout(saveTimer);saveTimer=setTimeout(()=>remoteRef.set(D).catch(e=>alert("Gagal menyimpan ke server: "+e.message)),450)}
+function sd(){if(location.hash!=="#admin"||!isAdmin)return;try{localStorage.setItem(DK,JSON.stringify(D))}catch(e){};if(!fbReady||!remoteReady){setSt("Belum terhubung ke Firebase: perubahan BELUM tersimpan ke server.");return}clearTimeout(saveTimer);setSt("Menyimpan…");saveTimer=setTimeout(()=>remoteRef.set(D).then(()=>setSt("Tersimpan ke server ✓ "+new Date().toLocaleTimeString())).catch(e=>{setSt("Gagal menyimpan: "+e.message);alert("Gagal menyimpan ke server: "+e.message)}),450)}
 function bootRealtime(){
  if(!firebaseConfigured()){admin();return}
+ setTimeout(()=>{if(!remoteReady&&!dbReadError){dbReadError="tidak ada respons dari server";startPoll();view();if(location.hash==="#admin")admin()}},6000);
  try{if(!firebase.apps.length)firebase.initializeApp(FIREBASE_CONFIG);auth=firebase.auth();remoteRef=firebase.database().ref("public/standings");fbReady=true;
-  remoteRef.on("value",snap=>{dbReadError="";const val=snap.val();if(val&&val.seasons){const wasReady=remoteReady;D=norm(val);remoteReady=true;si=Math.min(si,D.seasons.length-1);sel=wasReady?Math.min(sel,S().rounds.length-1):lastRound();view();if(location.hash==="#admin")admin()}else if(isAdmin&&!remoteReady){remoteReady=true;remoteRef.set(D).catch(e=>{dbReadError=e.message;if(location.hash==="#admin")admin()})}else{remoteReady=true;view()}},err=>{dbReadError=err.message;remoteReady=false;if(location.hash==="#admin")admin()});
+  remoteRef.on("value",snap=>{dbReadError="";const val=snap.val();if(val&&val.seasons){const wasReady=remoteReady;D=norm(val);remoteReady=true;si=Math.min(si,D.seasons.length-1);sel=wasReady?Math.min(sel,S().rounds.length-1):lastRound();view();if(location.hash==="#admin")admin()}else if(isAdmin&&!remoteReady){remoteReady=true;remoteRef.set(D).catch(e=>{dbReadError=e.message;if(location.hash==="#admin")admin()})}else{remoteReady=true;view();if(location.hash==="#admin")admin()}},err=>{dbReadError=err.message;remoteReady=false;startPoll();view();if(location.hash==="#admin")admin()});
   auth.onAuthStateChanged(user=>{currentFirebaseUser=user;const uidConfigured=ADMIN_UID!=="ISI_UID_ADMIN";isAdmin=!!(user&&uidConfigured&&user.uid===ADMIN_UID);if(user&&uidConfigured&&!isAdmin){auth.signOut();alert("Akun Google ini bukan admin yang diizinkan.")}if(isAdmin){remoteRef.once("value").then(snap=>{if(!snap.exists())remoteRef.set(D)}).catch(e=>{dbReadError=e.message;if(location.hash==="#admin")admin()})}if(location.hash==="#admin")admin();else{const a=$("#admin");if(a)a.textContent=""}});
- }catch(e){console.error(e);dbReadError=e.message;admin()}
+ }catch(e){console.error(e);dbReadError=e.message;startPoll();view();admin()}
 }
 let si=D.seasons.length-1;const S=()=>D.seasons[si];
 const $=s=>document.querySelector(s),num=v=>+v||0,cum=(o,k)=>o.p.slice(0,k+1).reduce((a,b)=>a+num(b),0);
@@ -100,9 +101,19 @@ const lastGrid=()=>{let s=0;S().grid.forEach((g,k)=>{if(g.length)s=k});return s}
 const lastRound=()=>{let s=0;S().rounds.forEach((_,k)=>{if(hasP(k))s=k});return s};
 let tab="teams",sel=lastRound();
 const flag=f=>{const s=E("span");s.innerHTML='<svg viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg">'+(FL[f]||'<rect width="30" height="20" fill="#888"/>')+'<rect width="30" height="20" fill="none" stroke="rgba(128,128,128,.45)"/></svg>';return s};
+let pollT=null,lastRaw="";
+function startPoll(){if(pollT||isAdmin)return;
+ const go=()=>{if(remoteReady){clearInterval(pollT);pollT=null;return}
+  fetch(FIREBASE_CONFIG.databaseURL+"/public/standings.json?t="+Date.now(),{cache:"no-store"}).then(r=>{if(!r.ok)throw new Error("HTTP "+r.status);return r.json()}).then(val=>{
+   if(!val||!val.seasons){dbReadError="";view();return}
+   const raw=JSON.stringify(val),first=!lastRaw;dbReadError="";
+   if(raw!==lastRaw){lastRaw=raw;D=norm(val);si=Math.min(si,D.seasons.length-1);sel=first?lastRound():Math.min(sel,S().rounds.length-1)}
+   view()}).catch(e=>{dbReadError=e.message;view()})};
+ go();pollT=setInterval(go,10000)}
+function setSt(t){const e=document.querySelector("#fbst");if(e)e.textContent=t}
 function syncTeams(Z){if(!Z||!Z.autoTeam)return;const nz=v=>+v||0;Z.teams.forEach(t=>{const ds=Z.drivers.filter(d=>d.team===t.name);Z.rounds.forEach((_,k)=>{const cars={};ds.forEach(d=>{const n=String(d.num==null?"":d.num).trim().replace(/^#/,""),key=n?"n"+n:"d"+d.name;cars[key]=Math.max(cars[key]||0,nz((d.p||[])[k]))});t.p[k]=Object.values(cars).reduce((a,b)=>a+b,0)})})}
 function view(){D.seasons.forEach(syncTeams);sd();const Z=S();document.title=(D.liga+" "+D.kelas+" Standings").trim();
- const box=$("#view");box.textContent="";
+ const box=$("#view");box.textContent="";if(dbReadError&&location.hash!=="#admin")E("div",{class:"arow",text:"\u26A0 Gagal memuat data terbaru dari server ("+dbReadError+"). Data yang tampil mungkin bukan yang terbaru. Coba refresh atau ganti jaringan."},box);
  const sb=E("div",{class:"ss"},box),se=E("select",{"aria-label":"Season"},sb);
  D.seasons.forEach((z,i)=>{const op=E("option",{text:z.name,value:i},se);if(i===si)op.selected=true});
  se.onchange=()=>{si=+se.value;sel=lastRound();view();admin()};
@@ -190,7 +201,7 @@ function admin(){const Z=S(),a=$("#admin");a.textContent="";if(location.hash!=="
    E("button",{class:"sm",text:"\u25BC"},row).onclick=()=>{const L=Z[key];if(idx<L.length-1){[L[idx+1],L[idx]]=[L[idx],L[idx+1]];view();admin()}};
    E("button",{class:"sm",text:"×"},row).onclick=()=>{Z[key].splice(idx,1);view();admin()}});
   E("button",{class:"sm",text:"+ "+lab},a).onclick=()=>{Z[key].push(key==="teams"?{name:"Tim Baru",num:"",color:"#3fb81f",p:Z.rounds.map(()=>0)}:{name:"Driver Baru",team:(Z.teams[0]||{}).name||"",p:Z.rounds.map(()=>0)});view();admin()};E("button",{class:"sm",text:"Urutkan sesuai poin"},a).onclick=()=>{Z[key].sort((x,y)=>cum(y,sel)-cum(x,sel));view();admin()}});
- E("p",{class:"mu",text:fbReady&&remoteReady?"Perubahan tersimpan otomatis ke Firebase dan akan tampil real-time di halaman pengunjung.":(dbReadError?"Firebase aktif, tetapi akses database belum diizinkan: "+dbReadError:"Menunggu koneksi dan izin Realtime Database.")},a);
+ E("p",{class:"mu",id:"fbst",text:fbReady&&remoteReady?"Perubahan tersimpan otomatis ke Firebase dan akan tampil real-time di halaman pengunjung.":(dbReadError?"Firebase aktif, tetapi akses database belum diizinkan: "+dbReadError:"Menunggu koneksi dan izin Realtime Database.")},a);
  if(isAdmin&&auth){E("button",{class:"sm",text:"Logout admin"},a).onclick=()=>auth.signOut();}
  E("button",{class:"sm",text:"Buang draft (kembali ke file)"},a).onclick=()=>{if(!confirm("Buang semua perubahan yang belum di-deploy?"))return;try{localStorage.removeItem(DK)}catch(e){}location.reload()};
  const txt=()=>"window.STANDINGS="+JSON.stringify(D,null,1)+";\n";
